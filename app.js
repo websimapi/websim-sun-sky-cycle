@@ -58,14 +58,98 @@ skyUniforms['mieDirectionalG'].value = 0.8;
 // Sun
 const sun = new THREE.Vector3();
 
+// Create visible sun disc
+const sunGeometry = new THREE.SphereGeometry(3, 32, 32);
+const sunMaterial = new THREE.MeshBasicMaterial({ 
+    color: 0xffffcc,
+    transparent: true,
+    opacity: 0.9
+});
+// Add glow effect with custom shader
+const sunGlowMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+        viewVector: { type: "v3", value: camera.position },
+        c: { type: "f", value: 0.5 },
+        p: { type: "f", value: 4.5 }
+    },
+    vertexShader: `
+        uniform vec3 viewVector;
+        uniform float c;
+        uniform float p;
+        varying float intensity;
+        void main() {
+            vec3 vNormal = normalize(normalMatrix * normal);
+            vec3 vNormel = normalize(normalMatrix * viewVector);
+            intensity = pow(c - dot(vNormal, vNormel), p);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform float c;
+        uniform float p;
+        varying float intensity;
+        void main() {
+            vec3 glow = vec3(1.0, 0.8, 0.3) * intensity;
+            gl_FragColor = vec4(glow, intensity);
+        }
+    `,
+    side: THREE.FrontSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true
+});
+
+const sunDisc = new THREE.Mesh(sunGeometry, sunMaterial);
+const sunGlow = new THREE.Mesh(sunGeometry.clone(), sunGlowMaterial);
+sunGlow.scale.multiplyScalar(1.5);
+scene.add(sunDisc);
+scene.add(sunGlow);
+
 // Moon
 const moonGeometry = new THREE.SphereGeometry(2, 32, 32);
 const moonMaterial = new THREE.MeshLambertMaterial({ 
-    color: 0xffffff,
-    emissive: 0x222222
+    color: 0xdddddd,
+    emissive: 0x111122,
+    transparent: true,
+    opacity: 0.8
 });
+// Add moon glow for better visibility
+const moonGlowMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+        viewVector: { type: "v3", value: camera.position },
+        c: { type: "f", value: 0.3 },
+        p: { type: "f", value: 2.0 }
+    },
+    vertexShader: `
+        uniform vec3 viewVector;
+        uniform float c;
+        uniform float p;
+        varying float intensity;
+        void main() {
+            vec3 vNormal = normalize(normalMatrix * normal);
+            vec3 vNormel = normalize(normalMatrix * viewVector);
+            intensity = pow(c - dot(vNormal, vNormel), p);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform float c;
+        uniform float p;
+        varying float intensity;
+        void main() {
+            vec3 glow = vec3(0.7, 0.8, 1.0) * intensity;
+            gl_FragColor = vec4(glow, intensity * 0.5);
+        }
+    `,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true
+});
+
 const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+const moonGlow = new THREE.Mesh(moonGeometry.clone(), moonGlowMaterial);
+moonGlow.scale.multiplyScalar(1.3);
 scene.add(moon);
+scene.add(moonGlow);
 
 // Moon light
 const moonLight = new THREE.DirectionalLight(0x4444ff, 0);
@@ -117,6 +201,12 @@ function updateSunAndLighting() {
     sun.setFromSphericalCoords(1, phi, theta);
     skyUniforms['sunPosition'].value.copy(sun);
     
+    // Update sun disc position
+    const sunPos = new THREE.Vector3();
+    sunPos.setFromSphericalCoords(200, phi, theta);
+    sunDisc.position.copy(sunPos);
+    sunGlow.position.copy(sunPos);
+    
     // Update directional light
     directionalLight.position.set(sun.x * 100, sun.y * 100, sun.z * 100);
     
@@ -130,6 +220,7 @@ function updateSunAndLighting() {
     const moonPos = new THREE.Vector3();
     moonPos.setFromSphericalCoords(200, moonPhi, moonTheta);
     moon.position.copy(moonPos);
+    moonGlow.position.copy(moonPos);
     
     // Update moon light
     moonLight.position.set(moonPos.x, moonPos.y, moonPos.z);
@@ -139,15 +230,22 @@ function updateSunAndLighting() {
     const moonHeight = Math.max(0, moonElevation / 90);
     const isNight = elevation < 0;
     
+    // Update sun visibility
+    sunDisc.visible = elevation > -10;
+    sunGlow.visible = elevation > -10;
+    sunMaterial.opacity = Math.max(0, Math.min(1, (elevation + 10) / 20));
+    
     if (isNight) {
-        // Night time - show moon
-        directionalLight.intensity = 0.05;
-        moonLight.intensity = moonHeight * 0.3;
-        ambientLight.intensity = 0.02 + (moonHeight * 0.08);
-        moon.material.emissive.setHex(0x111133);
+        // Night time - show moon with enhanced lighting
+        directionalLight.intensity = 0.02;
+        moonLight.intensity = moonHeight * 0.8; // Increased moon light intensity
+        ambientLight.intensity = 0.05 + (moonHeight * 0.15); // Better ambient lighting
+        moon.material.emissive.setHex(0x223344); // More visible moon glow
+        moon.material.opacity = Math.max(0.3, moonHeight * 0.9);
+        moonGlow.material.uniforms.c.value = 0.2 + moonHeight * 0.3;
         skyUniforms['turbidity'].value = 20;
         skyUniforms['rayleigh'].value = 1;
-        renderer.toneMappingExposure = 0.05 + (moonHeight * 0.1);
+        renderer.toneMappingExposure = 0.1 + (moonHeight * 0.2);
     } else {
         // Day time - hide moon
         const dayIntensity = Math.pow(sunHeight, 0.5);
@@ -155,6 +253,11 @@ function updateSunAndLighting() {
         moonLight.intensity = 0;
         ambientLight.intensity = 0.2 + (dayIntensity * 0.3);
         moon.material.emissive.setHex(0x000000);
+        moon.material.opacity = 0.1;
+        moonGlow.material.uniforms.c.value = 0.1;
+        
+        // Update sun intensity based on height
+        sunGlowMaterial.uniforms.c.value = 0.3 + sunHeight * 0.4;
         
         // Adjust sky parameters for different times of day
         if (sunHeight < 0.3) {
@@ -175,8 +278,8 @@ function updateSunAndLighting() {
     const coolness = Math.max(0, sunHeight - 0.5) * 2;
     
     if (isNight) {
-        directionalLight.color.setRGB(0.2, 0.3, 0.6); // Cool moonlight
-        moonLight.color.setRGB(0.6, 0.7, 1.0); // Cool moonlight
+        directionalLight.color.setRGB(0.3, 0.4, 0.7); // Enhanced moonlight color
+        moonLight.color.setRGB(0.8, 0.9, 1.0); // Brighter moonlight
     } else if (warmth > 0) {
         directionalLight.color.setRGB(1.0, 0.7 + warmth * 0.3, 0.5 + warmth * 0.3); // Warm sunrise/sunset
     } else {
